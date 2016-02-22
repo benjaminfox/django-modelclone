@@ -46,7 +46,7 @@ class ClonableModelAdmin(ModelAdmin):
             self.model._meta.app_label,
             getattr(self.model._meta, 'module_name', getattr(self.model._meta, 'model_name', '')))
         new_urlpatterns = patterns('',
-            url(r'^(.+)/clone/$',
+            url(r'^(.+)/change/clone/$',
                 self.admin_site.admin_view(self.clone_view),
                 name=url_name)
         )
