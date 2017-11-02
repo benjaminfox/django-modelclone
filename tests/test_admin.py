@@ -1,6 +1,8 @@
 import shutil
+import urlparse
 
 import django
+from django.http import HttpResponse
 from django.contrib.auth.models import User
 from django.contrib.admin import site as default_admin_site
 from django.core.urlresolvers import reverse
@@ -58,39 +60,35 @@ class ClonableModelAdminTests(WebTest):
         )
         self.post_with_tags.tags.add(self.tag1)
 
-        self.post_url = '/admin/posts/post/{0}/clone/'.format(
-            self.post.id)
-        self.post_with_comments_url = '/admin/posts/post/{0}/clone/'.format(
-            self.post_with_comments.id)
-        self.post_with_tags_url = '/admin/posts/post/{0}/clone/'.format(
-            self.post_with_tags.id)
+        self.post_url = reverse('admin:posts_post_clone', args=(self.post.id,))
+        self.post_with_comments_url = reverse('admin:posts_post_clone', args=(self.post_with_comments.id,))
+        self.post_with_tags_url = reverse('admin:posts_post_clone', args=(self.post_with_tags.id,))
 
         self.multimedia = Multimedia.objects.create(
             title = 'Jason Polakow',
             image = File(open('tests/files/img.jpg')),
             document = File(open('tests/files/file.txt')),
         )
-        self.multimedia_url = '/admin/posts/multimedia/{0}/clone/'.format(
-            self.multimedia.id)
-
+        self.multimedia_url = reverse('admin:posts_multimedia_clone', args=(self.multimedia.id,))
 
     def test_clone_view_is_wrapped_as_admin_view(self):
         model = mock.Mock()
         admin_site = mock.Mock()
-        admin_site.admin_view.return_value = '<wrapped clone view>'
+        # Fake ClonableModelAdmin.clone_view
+        the_view = lambda a, b, c: HttpResponse()
+        admin_site.admin_view.return_value = the_view
 
         model_admin = ClonableModelAdmin(model, admin_site)
         clone_view_urlpattern = model_admin.get_urls()[0]
 
-        if django.VERSION >= (1, 8):
-            assert '<wrapped clone view>' == clone_view_urlpattern._callback_str
-        else:
-            assert '<wrapped clone view>' == clone_view_urlpattern.callback
-
+        assert the_view == clone_view_urlpattern.callback
 
     def test_clone_view_url_name(self):
         post_id = self.post.id
-        expected_url = '/admin/posts/post/{0}/clone/'.format(post_id)
+        if django.VERSION[1] < 9:
+            expected_url = '/admin/posts/post/{0}/clone/'.format(post_id)
+        else:
+            expected_url = '/admin/posts/post/{0}/change/clone/'.format(post_id)
 
         assert reverse('admin:posts_post_clone', args=(post_id,)) == expected_url
 
@@ -163,7 +161,7 @@ class ClonableModelAdminTests(WebTest):
 
 
     def test_clone_should_return_404_if_object_does_not_exist(self):
-        response = self.app.get('/admin/posts/post/999999999/clone/', user='admin',
+        response = self.app.get(reverse('admin:posts_post_clone', args=(999999999,)), user='admin',
                                 expect_errors=True)
         assert 404 == response.status_code
 
@@ -301,10 +299,9 @@ class ClonableModelAdminTests(WebTest):
         new_id = Post.objects.latest('id').id
 
         assert 302 == response.status_code
-        assert (
-            'http://testserver/admin/posts/post/{0}/'.format(new_id) == response['Location'] or
-            '/admin/posts/post/4/change/' == response['Location']
-        )
+
+        loc = urlparse.urlparse(response['Location'])
+        assert reverse('admin:posts_post_change', args=(new_id,)) == loc.path
 
 
     # clone with images and files
@@ -315,9 +312,12 @@ class ClonableModelAdminTests(WebTest):
         image = select_element(response, '.field-image p.file-upload a')
         document = select_element(response, '.field-document p.file-upload a')
 
-        assert '/media/images/img.jpg' == image.get('href')
-        assert '/media/documents/file.txt' == document.get('href')
-
+        if django.VERSION[1] == 10:
+            assert '/media/images/tests/files/img.jpg' == image.get('href')
+            assert '/media/documents/tests/files/file.txt' == document.get('href')
+        else:
+            assert '/media/images/img.jpg' == image.get('href')
+            assert '/media/documents/file.txt' == document.get('href')
 
     def test_clone_should_keep_file_path_from_original_object_on_submit(self):
         response = self.app.get(self.multimedia_url, user='admin')
@@ -325,9 +325,12 @@ class ClonableModelAdminTests(WebTest):
 
         multimedia = Multimedia.objects.latest('id')
 
-        assert 'images/img.jpg' == str(multimedia.image)
-        assert 'documents/file.txt' == str(multimedia.document)
-
+        if django.VERSION[1] == 10:
+            assert 'images/tests/files/img.jpg' == str(multimedia.image)
+            assert 'documents/tests/files/file.txt' == str(multimedia.document)
+        else:
+            assert 'images/img.jpg' == str(multimedia.image)
+            assert 'documents/file.txt' == str(multimedia.document)
 
     def test_clone_should_override_file_from_original_object_on_submit_if_new_file_was_chosen(self):
         response = self.app.get(self.multimedia_url, user='admin')

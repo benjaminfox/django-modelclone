@@ -5,7 +5,7 @@ try:
 except ImportError:
     # django < 1.7
     from django.contrib.admin.util import unquote
-from django.conf.urls import patterns, url
+from django.conf.urls import url
 from django.utils.encoding import force_text
 from django.utils.translation import ugettext as _
 from django.utils.translation import ugettext_lazy as lazy
@@ -45,11 +45,20 @@ class ClonableModelAdmin(ModelAdmin):
         url_name = '{0}_{1}_clone'.format(
             self.model._meta.app_label,
             getattr(self.model._meta, 'module_name', getattr(self.model._meta, 'model_name', '')))
-        new_urlpatterns = patterns('',
-            url(r'^(.+)/change/clone/$',
-                self.admin_site.admin_view(self.clone_view),
-                name=url_name)
-        )
+
+        if VERSION[1] < 9:
+            from django.conf.urls import patterns
+            new_urlpatterns = patterns('',
+                url(r'^(.+)/clone/$',
+                    self.admin_site.admin_view(self.clone_view),
+                    name=url_name)
+                )
+        else:
+            new_urlpatterns = [
+                url(r'^(.+)/change/clone/$',
+                    self.admin_site.admin_view(self.clone_view),
+                    name=url_name)
+            ]
         original_urlpatterns = super(ClonableModelAdmin, self).get_urls()
 
         return new_urlpatterns + original_urlpatterns
@@ -61,13 +70,6 @@ class ClonableModelAdmin(ModelAdmin):
             'include_clone_link': True,
         })
         return super(ClonableModelAdmin, self).change_view(request, object_id, form_url, extra_context)
-
-    def get_formsets(self, request):
-        try:
-            return super(ClonableModelAdmin, self).get_formsets(request)
-        except AttributeError:
-            # ModelAdmin.get_formsets has been removed in Django 1.9
-            return (f[0] for f in super(ClonableModelAdmin, self).get_formsets_with_inlines(request))
 
     def clone_view(self, request, object_id, form_url='', extra_context=None):
         opts = self.model._meta
@@ -86,9 +88,6 @@ class ClonableModelAdmin(ModelAdmin):
         ModelForm = self.get_form(request)
         formsets = []
 
-        # NOTE: Django 1.5 has a secong argument on get_inline_instances()
-        inline_instances = self.get_inline_instances(request)
-
         if request.method == 'POST':
             form = ModelForm(request.POST, request.FILES)
             if form.is_valid():
@@ -99,7 +98,7 @@ class ClonableModelAdmin(ModelAdmin):
                 form_validated = False
 
             prefixes = {}
-            for FormSet, inline in zip(self.get_formsets(request), inline_instances):
+            for FormSet, inline in self.get_formsets_with_inlines(request):
                 prefix = FormSet.get_default_prefix()
                 prefixes[prefix] = prefixes.get(prefix, 0) + 1
                 if prefixes[prefix] != 1 or not prefix:
@@ -127,17 +126,7 @@ class ClonableModelAdmin(ModelAdmin):
                     # In Django 1.9 we need one more param
                     self.log_addition(request, new_object, "Cloned object")
 
-                if VERSION[1] <= 4:
-                    # Until Django 1.4 giving %s in the url would be replaced with
-                    # object primary key.
-                    # I can't use the default because it goes back only one level
-                    # ('../%s/') and now we are under clone url, so we need one more level
-                    post_url_continue = '../../%s/'
-                else:
-                    # Since 1.5 '%s' was deprecated and if None is given reverse() will
-                    # be used and do the right thing
-                    post_url_continue = None
-                return self.response_add(request, new_object, post_url_continue)
+                return self.response_add(request, new_object, None)
 
         else:
             initial = model_to_dict(original_obj)
@@ -145,20 +134,14 @@ class ClonableModelAdmin(ModelAdmin):
             form = ModelForm(initial=initial)
 
             prefixes = {}
-            for FormSet, inline in zip(self.get_formsets(request), inline_instances):
+            for FormSet, inline in self.get_formsets_with_inlines(request):
                 prefix = FormSet.get_default_prefix()
                 prefixes[prefix] = prefixes.get(prefix, 0) + 1
                 if prefixes[prefix] != 1 or not prefix:
                     prefix = "%s-%s" % (prefix, prefixes[prefix])
                 initial = []
 
-                # Django 1.8 Patch
-                if hasattr(inline, 'queryset'):
-                    get_queryset = inline.queryset
-                else:
-                    get_queryset = inline.get_queryset
-
-                queryset = get_queryset(request).filter(
+                queryset = inline.get_queryset(request).filter(
                     **{FormSet.fk.name: original_obj})
                 for obj in queryset:
                     initial.append(model_to_dict(obj, exclude=[obj._meta.pk.name,
@@ -185,7 +168,7 @@ class ClonableModelAdmin(ModelAdmin):
         media = self.media + admin_form.media
 
         inline_admin_formsets = []
-        for inline, formset in zip(inline_instances, formsets):
+        for inline, formset in zip(self.get_inline_instances(request), formsets):
             fieldsets = list(inline.get_fieldsets(request, original_obj))
             readonly = list(inline.get_readonly_fields(request, original_obj))
             prepopulated = dict(inline.get_prepopulated_fields(request, original_obj))
