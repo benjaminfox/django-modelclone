@@ -1,7 +1,5 @@
 # django-modelclone
 
-[![CircleCI](https://circleci.com/gh/RealGeeks/django-modelclone.svg?style=svg)](https://circleci.com/gh/RealGeeks/django-modelclone)
-
 Allows users to duplicate a model in admin.
 
 ## Installation
@@ -42,12 +40,10 @@ side effects.
 
 ## Requirements
 
-* Python 2.7
-* Django 1.8, 1.9, or 1.10
+* Python 2.7 or 3.7
+* Django 1.8, 1.9, 1.10, 1.11, 2.0 or 2.1
 
 See `tox.ini`
-
-Pull requests welcome for Python 3 support
 
 ## Hacking
 

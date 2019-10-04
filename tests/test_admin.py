@@ -1,11 +1,18 @@
 import shutil
-import urlparse
+try:
+    from urllib.parse import urlparse
+except ImportError:
+    from urlparse import urlparse
 
 import django
 from django.http import HttpResponse
 from django.contrib.auth.models import User
 from django.contrib.admin import site as default_admin_site
-from django.core.urlresolvers import reverse
+from django import VERSION
+if VERSION[0] < 2:
+    from django.core.urlresolvers import reverse
+else:
+    from django.urls import reverse
 from django.core.exceptions import PermissionDenied
 from django.core.files import File
 from django.conf import settings
@@ -64,12 +71,25 @@ class ClonableModelAdminTests(WebTest):
         self.post_with_comments_url = reverse('admin:posts_post_clone', args=(self.post_with_comments.id,))
         self.post_with_tags_url = reverse('admin:posts_post_clone', args=(self.post_with_tags.id,))
 
+        self.post_with_multimedia = Post.objects.create(
+            title = 'Pretty image',
+            content = 'Look!',
+        )
+
         self.multimedia = Multimedia.objects.create(
+            post = self.post_with_multimedia,
             title = 'Jason Polakow',
-            image = File(open('tests/files/img.jpg')),
+            image = File(open('tests/files/img.jpg', 'rb')),
             document = File(open('tests/files/file.txt')),
         )
+        self.post_with_multimedia_url = reverse('admin:posts_post_clone', args=(self.post_with_multimedia.id,))
         self.multimedia_url = reverse('admin:posts_multimedia_clone', args=(self.multimedia.id,))
+
+        self._patch_settings()
+        self.renew_app()
+
+    def tearDown(self):
+        self._unpatch_settings()
 
     def test_clone_view_is_wrapped_as_admin_view(self):
         model = mock.Mock()
@@ -85,7 +105,7 @@ class ClonableModelAdminTests(WebTest):
 
     def test_clone_view_url_name(self):
         post_id = self.post.id
-        if django.VERSION[1] < 9:
+        if django.VERSION[0] == 1 and django.VERSION[1] < 9:
             expected_url = '/admin/posts/post/{0}/clone/'.format(post_id)
         else:
             expected_url = '/admin/posts/post/{0}/change/clone/'.format(post_id)
@@ -247,6 +267,29 @@ class ClonableModelAdminTests(WebTest):
         assert 2 == post2.comment_set.count()
 
 
+    def test_clone_should_create_new_object_with_media_inlines_on_POST(self):
+        response = self.app.get(self.post_with_multimedia_url, user='admin')
+        response.form.submit()
+
+        post1 = Post.objects.get(title=self.post_with_multimedia.title)
+        post2 = Post.objects.get(title=self.post_with_multimedia.title + ' (duplicate)')
+
+        assert 1 == post1.multimedia_set.count()
+        assert 1 == post2.multimedia_set.count()
+        assert post1.multimedia_set.first().image == post2.multimedia_set.first().image
+        assert post1.multimedia_set.first().document == post2.multimedia_set.first().document
+
+    def test_clone_should_media_inlines_overrides_on_POST(self):
+        response = self.app.get(self.post_with_multimedia_url, user='admin')
+        response.form['multimedia_set-0-image'] = Upload('tests/files/img-2.jpg')
+        response.form['multimedia_set-0-document'] = Upload('tests/files/file-2.txt')
+        response.form.submit()
+
+        post2 = Post.objects.get(title=self.post_with_multimedia.title + ' (duplicate)')
+
+        assert post2.multimedia_set.first().image.name == 'images/img-2.jpg'
+        assert post2.multimedia_set.first().document.name == 'documents/file-2.txt'
+
     def test_clone_should_ignore_initial_data_of_inline_form_if_delete_is_checked(self):
         response = self.app.get(self.post_with_comments_url, user='admin')
         response.form.set('comment_set-0-DELETE', 'on')  # delete first comment
@@ -281,7 +324,7 @@ class ClonableModelAdminTests(WebTest):
         response.form.set('tags', [self.tag2.id])
         response = response.form.submit()
 
-        assert 'Please correct the error below' in response.content
+        assert b'Please correct the error below' in response.content
 
         tag1_option = select_element(response, 'select[name=tags] option[value="{id}"]'
             .format(id=self.tag1.id))
@@ -300,7 +343,7 @@ class ClonableModelAdminTests(WebTest):
 
         assert 302 == response.status_code
 
-        loc = urlparse.urlparse(response['Location'])
+        loc = urlparse(response['Location'])
         assert reverse('admin:posts_post_change', args=(new_id,)) == loc.path
 
 
@@ -308,11 +351,12 @@ class ClonableModelAdminTests(WebTest):
 
     def test_clone_should_keep_file_path_from_original_object(self):
         response = self.app.get(self.multimedia_url, user='admin')
+        print(response.content)
 
         image = select_element(response, '.field-image p.file-upload a')
         document = select_element(response, '.field-document p.file-upload a')
 
-        if django.VERSION[1] == 10:
+        if django.VERSION[0] > 1 or django.VERSION[1] == 10:
             assert '/media/images/tests/files/img.jpg' == image.get('href')
             assert '/media/documents/tests/files/file.txt' == document.get('href')
         else:
@@ -325,7 +369,7 @@ class ClonableModelAdminTests(WebTest):
 
         multimedia = Multimedia.objects.latest('id')
 
-        if django.VERSION[1] == 10:
+        if django.VERSION[0] > 1 or django.VERSION[1] == 10:
             assert 'images/tests/files/img.jpg' == str(multimedia.image)
             assert 'documents/tests/files/file.txt' == str(multimedia.document)
         else:
